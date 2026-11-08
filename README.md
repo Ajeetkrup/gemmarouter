@@ -13,6 +13,7 @@ Given a user query or agent prompt and a set of $K$ candidate options (tools, in
 
 - **Zero-Latency Option Caching (`0 ms` per request):** Candidate option descriptions are encoded once and cached in memory. Each live routing call requires only **1 query encode + a `~1.6 ms` GPU (`~7–12 ms` CPU) decision head pass**.
 - **Safe-by-Default Abstention (`RouteResult.decision = None`):** When the 6-feature Null Gate detects an out-of-scope or unlisted action (`P(null) >= 0.58`), `res.abstain` is `True` and `res.decision` is `None`—preventing accidental fallback execution.
+- **Ambiguous Twin Collision / Clarifying-Question Gate (`margin_threshold = 0.40`):** When two nearly identical candidate tools collide on an ambiguous prompt (`P(null) < 0.58` and `p_top1 - p_top2 < 0.40`), `res.needs_clarification` is `True`, `res.decision` is `None`, and `res.clarify_options` returns the colliding `(top_1, top_2)` pair so the agent can ask a clarifying question instead of guessing.
 - **Exact `0.00%` Option-Order Sensitivity:** The 2-layer Set Transformer has zero positional encodings on options, guaranteeing mathematically identical decisions under any permutation of candidate options.
 - **Built-in `float16` NaN Guardrail:** Automatically selects `torch.bfloat16` on supported GPUs and `torch.float32` on CPU while explicitly blocking `torch.float16` (which causes `NaN` activations in Gemma 2).
 - **`@router.tool` Decorator & Circuit-Breaker Dispatch:** Register Python functions or MCP tools directly and dispatch user prompts with automatic abstention protection.
@@ -22,9 +23,9 @@ Given a user query or agent prompt and a set of $K$ candidate options (tools, in
 ## Installation
 
 ```bash
-pip install -e ./gemmarouter
+pip install -U gemmarouter
 # Or with optional competitor arena dependencies:
-pip install -e "./gemmarouter[arena]"
+pip install -U "gemmarouter[arena]"
 ```
 
 ---
@@ -117,7 +118,9 @@ flowchart LR
     Cache --> Head
     Head --> Out{"P(null) >= 0.58 ?"}
     Out -->|"Yes"| Abstain["decision = None (ABSTAIN)"]
-    Out -->|"No"| Route["decision = top_option"]
+    Out -->|"No"| Margin{"p1 - p2 < 0.40 ?"}
+    Margin -->|"Yes"| Clarify["decision = None<br/>needs_clarification = True"]
+    Margin -->|"No"| Route["decision = top_option"]
 ```
 
 ---

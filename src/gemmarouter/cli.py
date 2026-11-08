@@ -25,17 +25,34 @@ def _parse_option_flags(raw_options: list[str]) -> dict[str, str]:
 def _run_route_cmd(args: argparse.Namespace) -> int:
     """Execute the `gemmarouter route` CLI subcommand."""
     options = _parse_option_flags(args.option)
-    router = load(model_id=args.model, device=args.device, threshold=args.threshold)
-    res = router.route(args.query, options=options, threshold=args.threshold)
+    router = load(
+        model_id=args.model,
+        device=args.device,
+        threshold=args.threshold,
+        margin_threshold=args.margin_threshold,
+    )
+    res = router.route(
+        args.query,
+        options=options,
+        threshold=args.threshold,
+        margin_threshold=args.margin_threshold,
+    )
     if args.json:
         print(json.dumps(res.to_dict(), indent=2))
         return 0
 
-    status = "ABSTAIN (None of the options fit)" if res.abstain else f"ROUTED -> {res.decision}"
+    if res.needs_clarification:
+        status = f"CLARIFICATION NEEDED -> {res.clarify_options}"
+    elif res.abstain:
+        status = "ABSTAIN (None of the options fit)"
+    else:
+        status = f"ROUTED -> {res.decision}"
     print("=" * 68)
     print(f"Query          : {args.query}")
     print(f"Decision       : {status}")
-    print(f"Top Candidate  : {res.top_option} ({res.confidence * 100:.2f}%)")
+    if res.clarification_prompt:
+        print(f"Clarification  : {res.clarification_prompt}")
+    print(f"Top Candidate  : {res.top_option} ({res.confidence * 100:.2f}%, margin={res.margin:.4f})")
     print(f"P(null)        : {res.null_probability:.4f} (threshold={res.threshold:.2f})")
     print(f"Latency        : {res.latency_ms:.2f} ms (Head: {res.head_latency_ms:.3f} ms)")
     print("=" * 68)
@@ -74,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Candidate option in 'key:description' format (pass at least two -o flags)",
     )
     p_route.add_argument("--threshold", type=float, default=0.58, help="Null Gate abstention threshold (default: 0.58)")
+    p_route.add_argument("--margin-threshold", type=float, default=0.40, help="Top-2 margin threshold for twin-tool clarification (default: 0.40)")
     p_route.add_argument("--model", default=DEFAULT_REPO_ID, help="Hugging Face model ID or local path")
     p_route.add_argument("--device", default=None, help="PyTorch device ('cpu' or 'cuda')")
     p_route.add_argument("--json", action="store_true", help="Output raw JSON")

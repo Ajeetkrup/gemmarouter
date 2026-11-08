@@ -18,7 +18,7 @@ DEFAULT_REPO_ID = "Ajeet-001/embeddinggemma2-decision-router"
 
 @dataclass(frozen=True)
 class RouteResult:
-    """Safe-by-default routing result where `decision` is None whenever `abstain` is True."""
+    """Safe-by-default routing result where `decision` is None whenever `abstain` or `needs_clarification` is True."""
 
     decision: str | None
     top_option: str
@@ -30,6 +30,11 @@ class RouteResult:
     option_cache_hit: bool
     latency_ms: float
     head_latency_ms: float
+    margin: float = 1.0
+    margin_threshold: float = 0.40
+    needs_clarification: bool = False
+    clarify_options: tuple[str, str] | None = None
+    clarification_prompt: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -92,6 +97,53 @@ def _normalize_options(
     return cleaned
 
 
+def _build_route_result(
+    opt_keys: list[str],
+    probs_t: torch.Tensor,
+    p_null: float,
+    eff_thresh: float,
+    eff_margin: float,
+    cache_hit: bool,
+    total_ms: float,
+    head_ms: float,
+) -> RouteResult:
+    """Construct a calibrated RouteResult with out-of-scope abstention and twin-collision clarification."""
+    probs_list = probs_t.tolist()
+    sorted_vals, sorted_idxs = torch.topk(probs_t, k=min(2, len(opt_keys)))
+    top_idx = int(sorted_idxs[0].item())
+    second_idx = int(sorted_idxs[1].item()) if len(sorted_idxs) > 1 else top_idx
+    top_key, second_key = opt_keys[top_idx], opt_keys[second_idx]
+    top_prob, second_prob = float(sorted_vals[0].item()), float(sorted_vals[1].item())
+    margin = round(top_prob - second_prob, 4)
+
+    is_null = p_null >= eff_thresh
+    needs_clarification = (not is_null) and (margin < eff_margin)
+    abstain = is_null or needs_clarification
+    clarify_msg = (
+        f"Ambiguous collision between '{top_key}' ({top_prob * 100:.1f}%) and "
+        f"'{second_key}' ({second_prob * 100:.1f}%). Please clarify which option to run."
+        if needs_clarification
+        else None
+    )
+    return RouteResult(
+        decision=None if abstain else top_key,
+        top_option=top_key,
+        confidence=round(top_prob, 4),
+        null_probability=round(p_null, 6),
+        abstain=abstain,
+        threshold=eff_thresh,
+        probabilities={k: round(float(p), 4) for k, p in zip(opt_keys, probs_list)},
+        option_cache_hit=cache_hit,
+        latency_ms=round(total_ms, 2),
+        head_latency_ms=round(head_ms, 3),
+        margin=margin,
+        margin_threshold=eff_margin,
+        needs_clarification=needs_clarification,
+        clarify_options=(top_key, second_key) if needs_clarification else None,
+        clarification_prompt=clarify_msg,
+    )
+
+
 class DecisionRouter:
     """Ergonomic, cached decision and tool router wrapping GemmaDecisionRouterModel."""
 
@@ -100,11 +152,14 @@ class DecisionRouter:
         model: Any,
         tokenizer: Any = None,
         threshold: float | None = None,
+        margin_threshold: float | None = None,
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
         cfg_thresh = getattr(getattr(model, "config", None), "null_threshold", 0.58)
+        cfg_margin = getattr(getattr(model, "config", None), "margin_threshold", 0.40)
         self.threshold = float(cfg_thresh if threshold is None else threshold)
+        self.margin_threshold = float(cfg_margin if margin_threshold is None else margin_threshold)
         self._tools: dict[str, RegisteredTool] = {}
         self._local_opt_cache: OrderedDict[tuple[str, ...], torch.Tensor] = OrderedDict()
         self.max_cache_size: int = 128
@@ -145,14 +200,16 @@ class DecisionRouter:
         query: str,
         options: dict[str, str] | list[str] | None = None,
         threshold: float | None = None,
+        margin_threshold: float | None = None,
     ) -> RouteResult:
-        """Route `query` across `options` (or registered tools) with safe abstention and option caching."""
+        """Route `query` across `options` with calibrated abstention and twin-collision clarification."""
         if not isinstance(query, str) or not query.strip():
             raise ValueError("`query` must be a non-empty string.")
         norm_opts = _normalize_options(options, self._tools)
         opt_keys = list(norm_opts.keys())
         opt_texts = [f"{k}: {v}" if v and v != k else k for k, v in norm_opts.items()]
         eff_thresh = float(self.threshold if threshold is None else threshold)
+        eff_margin = float(self.margin_threshold if margin_threshold is None else margin_threshold)
 
         t0 = time.perf_counter()
         o_vecs, cache_hit = self._get_cached_option_vectors(opt_texts)
@@ -165,23 +222,9 @@ class DecisionRouter:
         total_ms = (time.perf_counter() - t0) * 1000.0
 
         probs_t = F.softmax(head_logits.float(), dim=-1)[0].cpu()
-        probs_list = probs_t.tolist()
-        top_idx = int(probs_t.argmax().item())
-        top_key = opt_keys[top_idx]
         p_null = float(torch.sigmoid(null_logits.float()[0]).cpu().item())
-        abstain = p_null >= eff_thresh
-
-        return RouteResult(
-            decision=None if abstain else top_key,
-            top_option=top_key,
-            confidence=round(float(probs_list[top_idx]), 4),
-            null_probability=round(p_null, 6),
-            abstain=abstain,
-            threshold=eff_thresh,
-            probabilities={k: round(float(p), 4) for k, p in zip(opt_keys, probs_list)},
-            option_cache_hit=cache_hit,
-            latency_ms=round(total_ms, 2),
-            head_latency_ms=round(head_ms, 3),
+        return _build_route_result(
+            opt_keys, probs_t, p_null, eff_thresh, eff_margin, cache_hit, total_ms, head_ms
         )
 
     def tool(self, description: str, name: str | None = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -206,10 +249,11 @@ class DecisionRouter:
         query: str,
         *args: Any,
         threshold: float | None = None,
+        margin_threshold: float | None = None,
         **kwargs: Any,
     ) -> tuple[RouteResult, Any]:
         """Route `query` to a registered `@router.tool` and execute it only if `abstain` is False."""
-        res = self.route(query, options=None, threshold=threshold)
+        res = self.route(query, options=None, threshold=threshold, margin_threshold=margin_threshold)
         if res.abstain or res.decision is None:
             return res, None
         reg = self._tools.get(res.decision)
@@ -223,6 +267,7 @@ def load(
     device: str | torch.device | None = None,
     dtype: str | torch.dtype | None = None,
     threshold: float | None = None,
+    margin_threshold: float | None = None,
     *,
     revision: str | None = None,
     trust_remote_code: bool = False,
@@ -244,4 +289,9 @@ def load(
         .to(resolved_dev)
         .eval()
     )
-    return DecisionRouter(model=mod, tokenizer=tok, threshold=threshold)
+    return DecisionRouter(
+        model=mod,
+        tokenizer=tok,
+        threshold=threshold,
+        margin_threshold=margin_threshold,
+    )

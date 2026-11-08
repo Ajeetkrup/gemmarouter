@@ -24,6 +24,7 @@ class GemmaDecisionRouterConfig(PretrainedConfig):
         n_layers: int = 2,
         decision_temperature: float = 0.05,
         null_threshold: float = 0.58,
+        margin_threshold: float = 0.40,
         max_seq_length: int = 2048,
         prompt: str = "task: classification | query: ",
         option_prompt: str = "title: none | text: ",
@@ -40,6 +41,7 @@ class GemmaDecisionRouterConfig(PretrainedConfig):
         self.n_layers = n_layers
         self.decision_temperature = decision_temperature
         self.null_threshold = null_threshold
+        self.margin_threshold = margin_threshold
         self.max_seq_length = max_seq_length
         self.prompt = prompt
         self.option_prompt = option_prompt

@@ -130,6 +130,28 @@ class TestGemmaRouterSDK(unittest.TestCase):
         self.assertIsNone(sig.parameters["revision"].default)
         self.assertIsInstance(self.router.model, gemmarouter.GemmaDecisionRouterModel)
 
+    def test_ambiguous_twin_collision_requests_clarification(self) -> None:
+        """Verify two near-identical tools trigger needs_clarification=True on ambiguous queries."""
+        twin_opts = {
+            "stripe_refund_us": "Issue a full or partial payment refund to a US customer credit card via Stripe.",
+            "stripe_refund_eu": "Issue a full or partial payment refund to an EU customer credit card via Stripe.",
+            "kubectl_pod_logs": "Fetch container stdout and error logs from a Kubernetes pod in a cluster.",
+        }
+        q_ambig = "Refund the duplicate invoice #8841 charge back to the customer credit card on Stripe."
+        res_ambig = self.router.route(q_ambig, options=twin_opts)
+        self.assertTrue(res_ambig.needs_clarification)
+        self.assertTrue(res_ambig.abstain)
+        self.assertIsNone(res_ambig.decision)
+        self.assertEqual(res_ambig.clarify_options, ("stripe_refund_us", "stripe_refund_eu"))
+        self.assertLess(res_ambig.margin, 0.40)
+
+        q_spec = "Refund 45 EUR back to the EU customer credit card on Stripe for duplicate invoice #8841."
+        res_spec = self.router.route(q_spec, options=twin_opts)
+        self.assertFalse(res_spec.needs_clarification)
+        self.assertFalse(res_spec.abstain)
+        self.assertEqual(res_spec.decision, "stripe_refund_eu")
+        self.assertGreaterEqual(res_spec.margin, 0.40)
+
 
 if __name__ == "__main__":
     unittest.main()
