@@ -1,0 +1,14 @@
+Apache License 2.0 (SDK & SetEquivariantDecisionHead Code)
+==========================================================
+
+Copyright 2026 Ajeet
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Base Model Notice (google/embeddinggemma-2):
+The underlying backbone weights (`google/embeddinggemma-2`) are subject to the
+Gemma Terms of Use: https://huggingface.co/google/embeddinggemma-2
