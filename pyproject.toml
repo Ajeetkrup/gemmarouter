@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gemmarouter"
-version = "0.1.1"
+version = "0.1.2"
 description = "Set-Equivariant Decision & Tool Router with Calibrated Abstention on EmbeddingGemma 2"
 readme = "README.md"
 license = "Apache-2.0"

@@ -19,7 +19,7 @@ from .router import (
     select_safe_device_and_dtype,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __all__ = [
     "DecisionRouter",
     "GemmaDecisionOutput",
