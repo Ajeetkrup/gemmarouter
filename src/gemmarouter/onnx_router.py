@@ -128,6 +128,8 @@ class ONNXDecisionRouter:
         self._get_cached_option_vectors(opt_texts)
         return len(opt_texts)
 
+    prewarm = prewarm_options
+
     def route(
         self,
         query: str,
