@@ -9,6 +9,8 @@ from .modeling import (
     QuestionSpec,
     TypedAnswer,
 )
+from .gguf_loader import load_gguf
+from .onnx_router import ONNXDecisionRouter, load_onnx
 from .router import (
     DecisionRouter,
     RegisteredTool,
@@ -24,6 +26,7 @@ __all__ = [
     "GemmaDecisionRouterConfig",
     "GemmaDecisionRouterModel",
     "GemmaDecisionRouterPreTrainedModel",
+    "ONNXDecisionRouter",
     "QUESTION_TYPES",
     "QuestionSpec",
     "RegisteredTool",
@@ -31,5 +34,7 @@ __all__ = [
     "SetEquivariantDecisionHead",
     "TypedAnswer",
     "load",
+    "load_gguf",
+    "load_onnx",
     "select_safe_device_and_dtype",
 ]

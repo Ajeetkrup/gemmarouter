@@ -24,8 +24,12 @@ Given a user query or agent prompt and a set of $K$ candidate options (tools, in
 
 ```bash
 pip install -U gemmarouter
-# Or with optional competitor arena dependencies:
-pip install -U "gemmarouter[arena]"
+
+# Optional extras:
+pip install -U "gemmarouter[onnx]"   # Pure ONNX Runtime engine (no PyTorch needed at inference)
+pip install -U "gemmarouter[gguf]"   # Single-file GGUF loader & dequantizer
+pip install -U "gemmarouter[edge]"   # Both ONNX and GGUF edge capabilities
+pip install -U "gemmarouter[arena]"  # Competitor arena dependencies (semantic-router, etc.)
 ```
 
 ---
@@ -95,15 +99,84 @@ print(res_unsafe.abstain, res_unsafe.decision, output_unsafe)
 
 ### 1. Route from Terminal
 ```bash
+# PyTorch backend:
 gemmarouter route "My new card still has not arrived after two weeks." \
   -o "card arrival:Where is my card? It has not arrived yet." \
   -o "lost or stolen card:I lost my card or it was stolen." \
   -o "exchange rate:What exchange rate do you use?"
+
+# ONNX Runtime backend (pure NumPy/ONNX):
+gemmarouter route "My new card still has not arrived." \
+  -o "card arrival:Where is my card? It has not arrived yet." \
+  -o "lost or stolen card:I lost my card or it was stolen." \
+  --onnx ./dist_edge/onnx
+
+# GGUF single-file backend:
+gemmarouter route "My new card still has not arrived." \
+  -o "card arrival:Where is my card? It has not arrived yet." \
+  -o "lost or stolen card:I lost my card or it was stolen." \
+  --gguf ./dist_edge/gguf/embeddinggemma2-decision-router-q8_0.gguf
 ```
 
-### 2. Launch Interactive 3-Column Live Playground
+### 2. Export to Edge Formats (ONNX & GGUF)
+```bash
+# Export decoupled ONNX (FP32 + dynamic INT8 quantized)
+gemmarouter export --format onnx --quantization both --output-dir ./dist_edge
+
+# Export single-file GGUF (Q8_0 quantized)
+gemmarouter export --format gguf --quantization q8_0 --output-dir ./dist_edge
+```
+
+### 3. Launch Interactive 3-Column Live Playground
 ```bash
 gemmarouter playground --port 7860
+```
+
+---
+
+## Edge & Embedded Deployment (ONNX & GGUF)
+
+`gemmarouter` includes production-ready decoupled ONNX models and single-file GGUF containers for low-latency, edge, and containerized deployments.
+
+| Format | File(s) | Total Size | Notes |
+|---|---|---|---|
+| **PyTorch Checkpoint** | `model.safetensors` | `565 MB` | Standard Hugging Face hub format (BF16) |
+| **ONNX Decoupled (FP32)** | `encoder.onnx` (`1035 MB`) + `decision_head.onnx` (`44 MB`) | `1,079 MB` | Decoupled architecture preserves `< 3 ms` option caching |
+| **ONNX Decoupled (INT8)** | `encoder_int8.onnx` (`261 MB`) + `decision_head_int8.onnx` (`11 MB`) | `272 MB` | Dynamic INT8 quantized, 4x size reduction |
+| **GGUF (BF16)** | `embeddinggemma2-decision-router-bf16.gguf` | `561 MB` | Single-file portable container with all 456 tensors & metadata |
+| **GGUF (Q8_0)** | `embeddinggemma2-decision-router-q8_0.gguf` | `319 MB` | 8-bit quantized backbone + F32 head & layer norms |
+
+### Pure ONNX Runtime Inference (Zero PyTorch Dependency)
+
+For microservices or edge environments where PyTorch is too heavy, run inference using pure ONNX Runtime and NumPy:
+
+```python
+import gemmarouter
+
+# Load decoupled ONNX models (encoder + decision head)
+router = gemmarouter.load_onnx("./dist_edge/onnx", execution_provider="CPUExecutionProvider")
+
+options = {
+    "fetch_logs": "Fetch stdout and stderr container logs from a Kubernetes pod.",
+    "restart_pod": "Trigger a graceful restart of a Kubernetes pod.",
+}
+
+# Fast routing with automatic bounded option caching
+res = router.route("Show error logs for the auth service pod", options=options)
+print(f"Decision: {res.decision} (confidence: {res.confidence:.1%}, margin: {res.margin:.4f})")
+# -> Decision: fetch_logs (confidence: 96.9%, margin: 0.9380)
+```
+
+### Single-File GGUF Inference
+
+```python
+import gemmarouter
+
+# Load GGUF file directly (auto-dequantizes Q8_0 weights with lossless Null Gate calibration)
+router = gemmarouter.load_gguf("./dist_edge/gguf/embeddinggemma2-decision-router-q8_0.gguf")
+
+res = router.route("Show error logs for the auth service pod", options=options)
+print(f"Decision: {res.decision} (confidence: {res.confidence:.1%})")
 ```
 
 ---

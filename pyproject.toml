@@ -40,6 +40,9 @@ dependencies = [
 
 [project.optional-dependencies]
 arena = ["laya>=0.4.22"]
+onnx = ["onnx>=1.16.0", "onnxruntime>=1.19.0"]
+gguf = ["gguf>=0.10.0"]
+edge = ["onnx>=1.16.0", "onnxruntime>=1.19.0", "gguf>=0.10.0"]
 
 [project.urls]
 Homepage = "https://github.com/Ajeetkrup/gemmarouter"
